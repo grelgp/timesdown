@@ -492,6 +492,7 @@ p { margin: 0; }
   z-index: 90;
 }
 #flash.on { opacity: 1; }
+#flash.on.skip { background: var(--warn); opacity: 0.6; }
 
 #toast {
   position: fixed;

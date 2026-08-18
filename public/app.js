@@ -315,6 +315,7 @@
     noteCard(id, 'skip');
     g.deck.shift();
     g.deck.push(id);       // straight to the bottom of the pile
+    flashSkip();
     buzz(12);
     nextCard();
   }
@@ -404,9 +405,17 @@
   }
 
   function flashGreen() {
-    flashEl.classList.add('on');
+    flash();
+  }
+
+  function flashSkip() {
+    flash('skip');
+  }
+
+  function flash(variant) {
+    flashEl.className = variant ? 'on ' + variant : 'on';
     clearTimeout(flashHandle);
-    flashHandle = setTimeout(function () { flashEl.classList.remove('on'); }, FLASH_MS);
+    flashHandle = setTimeout(function () { flashEl.className = ''; }, FLASH_MS);
   }
 
   // ------------------------------------------------------------------ render
