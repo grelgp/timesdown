@@ -78,6 +78,30 @@ work without it. It defaults to 30 seconds and the host can set 30/45/60/90.
 The end of a turn also beeps and vibrates, since the speaker may be miming with
 the phone face down.
 
+## Deploying
+
+In production this runs as a Docker container. There is nothing to install and
+nothing to build — the `Dockerfile` is a single `node:20-alpine` stage that
+copies `server.js` and `public/` in and runs them as the unprivileged `node`
+user, since rooms live in memory and nothing is ever written to disk.
+
+It sits behind Traefik on the `proxy` network (see `compose.yml`), publicly
+reachable at **`timesdown.grelgp.fr`**. Public rather than VPN-only on purpose:
+the players are guests holding their own phones, and they cannot be WireGuard
+peers. The router is deliberately *not* behind Traefik's `compress` middleware
+— the live state feed is Server-Sent Events, and a compressor that buffers
+would stall it. Full exposure model, DNS, and certificate details are
+documented in the parent `server` repo's `README.md`.
+
+```bash
+docker compose up -d --build
+```
+
+Restarting the container ends any game in progress, same as restarting the
+server locally.
+
+---
+
 ## Layout
 
 | Path | What it is |
@@ -88,6 +112,8 @@ the phone face down.
 | `public/rules.js` | Pure deck/turn rules, shared by the browser and the tests. |
 | `public/app.js` | Lobby, game loop, rendering. |
 | `test/` | Node's built-in test runner. |
+| `Dockerfile` | Single-stage `node:20-alpine`, runs as `node` on port 3000. |
+| `compose.yml` | Traefik labels for `timesdown.grelgp.fr` on the `proxy` network. |
 
 Rooms live in memory and are dropped after 12 hours idle. Restarting the server
 ends any game in progress.

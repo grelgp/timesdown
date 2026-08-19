@@ -1,0 +1,36 @@
+# Time's Down — public, because the players are guests holding their own
+# phones. They cannot be WireGuard peers, so `internal` alone would make the
+# game unplayable for everyone but the owner of this box.
+#
+# `entrypoints=websecure` is what makes it public. See ../README.md.
+
+networks:
+  proxy:
+    external: true
+
+services:
+  timesdown:
+    build: .
+    image: timesdown:latest
+    container_name: timesdown
+    restart: unless-stopped
+
+    # No `ports:` on purpose. Traefik reaches port 3000 over the proxy
+    # network; publishing it would also open it to the whole LAN.
+
+    environment:
+      - TZ=Europe/Paris
+
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.timesdown.rule=Host(`timesdown.grelgp.fr`)"
+      # Public AND reachable over the VPN, so peers do not have to hairpin out
+      # through the router to come back to this same box.
+      - "traefik.http.routers.timesdown.entrypoints=websecure,internal"
+      - "traefik.http.routers.timesdown.middlewares=public-ratelimit@file"
+      # Deliberately NOT behind `compress@file`: the live state feed is
+      # Server-Sent Events, and a compressor that buffers would stall it.
+      - "traefik.http.services.timesdown.loadbalancer.server.port=3000"
+
+    networks:
+      - proxy
