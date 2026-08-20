@@ -28,6 +28,7 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
+  overflow-x: hidden;
   overscroll-behavior: none;
 }
 
@@ -60,6 +61,7 @@ input, textarea { user-select: text; -webkit-user-select: text; }
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  gap: 14px;
   padding: calc(var(--safe-top) + 16px) var(--pad) calc(var(--safe-bottom) + 16px);
   max-width: 560px;
   margin: 0 auto;
@@ -223,7 +225,7 @@ p { margin: 0; }
   letter-spacing: 0.14em;
 }
 .codebox .code {
-  font-size: 2.7rem;
+  font-size: clamp(1.8rem, 13vw, 2.7rem);
   font-weight: 850;
   color: var(--accent);
   line-height: 1.15;
@@ -235,6 +237,7 @@ p { margin: 0; }
 .counts { display: flex; gap: 10px; }
 .count {
   flex: 1;
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 14px;
