@@ -16,6 +16,11 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 
+// The same module the browser loads, so the two can never disagree about how
+// many rounds there are or how long they run by default.
+const { ROUNDS, DEFAULT_ROUND_SECONDS } = require('./public/rules.js');
+const ROUND_COUNT = ROUNDS.length;
+
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -93,6 +98,16 @@ function cleanWord(raw) {
   return stripControl(raw).replace(/\s+/g, ' ').trim().slice(0, MAX_WORD_LEN);
 }
 
+const TURN_RANGE_ERROR = 'Turn length must be between ' + MIN_TURN_SECONDS +
+  ' and ' + MAX_TURN_SECONDS + ' seconds.';
+
+/** A whole number of seconds inside the allowed range, or null. */
+function checkSeconds(raw) {
+  const s = Math.round(Number(raw));
+  if (!Number.isFinite(s) || s < MIN_TURN_SECONDS || s > MAX_TURN_SECONDS) return null;
+  return s;
+}
+
 function cleanName(raw, fallback) {
   const s = typeof raw === 'string'
     ? stripControl(raw).replace(/\s+/g, ' ').trim().slice(0, 24)
@@ -110,7 +125,7 @@ function createRoom() {
     phase: 'lobby',            // lobby | playing | results
     settings: {
       teams: 2,
-      turnSeconds: 30,
+      roundSeconds: DEFAULT_ROUND_SECONDS.slice(),
       teamNames: defaultTeamNames(MAX_TEAMS)
     },
     words: new Map(),          // wordId -> { id, text, deviceId, addedAt }
@@ -166,7 +181,10 @@ function stateFor(room, deviceId, owner) {
     deviceCount: activeDeviceCount(room),
     settings: {
       teams: room.settings.teams,
-      turnSeconds: room.settings.turnSeconds,
+      // One length per round. `turnSeconds` is the same number for a client
+      // that only knows about a single turn length.
+      roundSeconds: room.settings.roundSeconds.slice(),
+      turnSeconds: room.settings.roundSeconds[0],
       teamNames: room.settings.teamNames.slice(0, room.settings.teams)
     },
     deckSize: room.deck.length,
@@ -402,13 +420,26 @@ async function handleApi(req, res, url) {
       }
       room.settings.teams = n;
     }
+    // `turnSeconds` sets every round at once; `roundSeconds` sets them one by
+    // one. Sending both applies the per-round list on top.
     if (body.turnSeconds !== undefined) {
-      const s = Math.round(Number(body.turnSeconds));
-      if (!Number.isFinite(s) || s < MIN_TURN_SECONDS || s > MAX_TURN_SECONDS) {
-        return fail(res, 400, 'Turn length must be between ' + MIN_TURN_SECONDS +
-          ' and ' + MAX_TURN_SECONDS + ' seconds.');
+      const s = checkSeconds(body.turnSeconds);
+      if (s === null) return fail(res, 400, TURN_RANGE_ERROR);
+      room.settings.roundSeconds = room.settings.roundSeconds.map(() => s);
+    }
+    if (body.roundSeconds !== undefined) {
+      if (!Array.isArray(body.roundSeconds)) {
+        return fail(res, 400, 'Round lengths must be a list.');
       }
-      room.settings.turnSeconds = s;
+      const next = room.settings.roundSeconds.slice();
+      for (let i = 0; i < Math.min(body.roundSeconds.length, ROUND_COUNT); i++) {
+        const raw = body.roundSeconds[i];
+        if (raw === null || raw === undefined) continue;   // leave that round alone
+        const s = checkSeconds(raw);
+        if (s === null) return fail(res, 400, TURN_RANGE_ERROR);
+        next[i] = s;
+      }
+      room.settings.roundSeconds = next;
     }
     if (Array.isArray(body.teamNames)) {
       body.teamNames.slice(0, MAX_TEAMS).forEach((name, i) => {

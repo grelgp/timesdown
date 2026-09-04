@@ -146,6 +146,43 @@ test('only the host can change settings or start', async () => {
   assert.deepEqual(set.body.settings.teamNames, ['Reds', 'Blues', 'Team 3', 'Greens']);
 });
 
+test('each round gets its own turn length', async () => {
+  const room = (await post('/api/rooms', { deviceId: 'h' })).body;
+  const code = room.code;
+  const t = room.ownerToken;
+
+  const fresh = (await get('/api/rooms/' + code + '/state?deviceId=h')).body;
+  assert.equal(fresh.settings.roundSeconds.length, 3);
+
+  const set = await post('/api/rooms/' + code + '/settings', {
+    deviceId: 'h', ownerToken: t, roundSeconds: [30, 45, 90]
+  });
+  assert.equal(set.status, 200);
+  assert.deepEqual(set.body.settings.roundSeconds, [30, 45, 90]);
+  assert.equal(set.body.settings.turnSeconds, 30, 'the first round stands in for older clients');
+
+  // One round at a time: the others are left alone.
+  const one = await post('/api/rooms/' + code + '/settings', {
+    deviceId: 'h', ownerToken: t, roundSeconds: [null, null, 60]
+  });
+  assert.deepEqual(one.body.settings.roundSeconds, [30, 45, 60]);
+
+  // The old single-length field still sets all three at once.
+  const all = await post('/api/rooms/' + code + '/settings', {
+    deviceId: 'h', ownerToken: t, turnSeconds: 45
+  });
+  assert.deepEqual(all.body.settings.roundSeconds, [45, 45, 45]);
+
+  for (const bad of [[10, 30, 30], [30, 30, 999], 'nope']) {
+    const res = await post('/api/rooms/' + code + '/settings', {
+      deviceId: 'h', ownerToken: t, roundSeconds: bad
+    });
+    assert.equal(res.status, 400, 'rejected: ' + JSON.stringify(bad));
+  }
+  const kept = (await get('/api/rooms/' + code + '/state?deviceId=h')).body;
+  assert.deepEqual(kept.settings.roundSeconds, [45, 45, 45], 'a rejected change writes nothing');
+});
+
 test('settings are range-checked', async () => {
   const room = (await post('/api/rooms', { deviceId: 'h' })).body;
   const code = room.code;

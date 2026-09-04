@@ -31,6 +31,12 @@
     }
   ];
 
+  /* One length per round, because they are not the same job. Thirty seconds is
+     plenty to talk with and nowhere near enough to act with: miming a word
+     takes longer than saying a sentence about it, and the speaker has to read
+     the card, stand up and start moving before anyone can even guess. */
+  var DEFAULT_ROUND_SECONDS = [30, 30, 45];
+
   function shuffle(list, random) {
     var rnd = random || Math.random;
     var a = list.slice();
@@ -88,6 +94,7 @@
 
   return {
     ROUNDS: ROUNDS,
+    DEFAULT_ROUND_SECONDS: DEFAULT_ROUND_SECONDS,
     shuffle: shuffle,
     applyTurn: applyTurn,
     takeCard: takeCard,

@@ -127,6 +127,12 @@ p { margin: 0; }
 .btn:disabled:active { transform: none; }
 .btn-block { width: 100%; }
 
+/* A button that has only just appeared and is not listening yet - see
+   TAP_LOCK_MS in app.js. It fades in rather than sitting there looking broken.
+   The element selector is there to outrank every other :active rule below. */
+.cooling { opacity: 0.45; }
+button.cooling:active { transform: none; }
+
 .btn-primary {
   background: linear-gradient(180deg, #ffc571, var(--accent));
   border-color: #ffd08a;
@@ -172,6 +178,13 @@ p { margin: 0; }
 
 /* Segmented control, used for team count and turn length. */
 .seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg-row { display: flex; flex-direction: column; gap: 5px; }
+.seg-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+}
 .seg .btn { flex: 1; min-width: 56px; min-height: 46px; padding: 8px; }
 .seg .btn[aria-pressed="true"] {
   background: var(--accent);
@@ -300,6 +313,7 @@ p { margin: 0; }
 .game { flex: 1; display: flex; flex-direction: column; gap: 14px; }
 
 .game-head { display: flex; flex-direction: column; gap: 4px; text-align: center; }
+
 .round-pill {
   align-self: center;
   background: var(--surface-2);
@@ -312,6 +326,62 @@ p { margin: 0; }
   color: var(--muted);
 }
 .team-name { font-size: 1.35rem; font-weight: 800; }
+
+/* The abandon cross sits in the corner, with an empty cell mirroring it on the
+   left so the pill stays centred. */
+.head-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  align-items: center;
+  gap: 6px;
+}
+.head-row .round-pill { justify-self: center; }
+
+.icon-btn {
+  justify-self: end;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.icon-btn:active { color: var(--danger); border-color: #4a2a35; }
+
+/* Deliberately mid-screen and round, so it shares no edge with the full-width
+   "Confirm" bar the host tapped a second earlier. */
+.orb-wrap { display: flex; justify-content: center; }
+.start-orb {
+  appearance: none;
+  /* Small screens have a scoreboard above this and no room to spare. */
+  width: clamp(132px, 42vw, 176px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid #ffd08a;
+  background: radial-gradient(120% 120% at 50% 0%, #ffd292, var(--accent) 70%);
+  color: #2a1a02;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  box-shadow: 0 14px 40px rgba(255, 180, 77, 0.22);
+  transition: transform 0.08s ease, opacity 0.15s ease;
+}
+.start-orb:active { transform: scale(0.97); }
+.start-orb .orb-go { font-size: 1.85rem; font-weight: 850; letter-spacing: -0.02em; }
+.start-orb .orb-secs {
+  font-size: 0.9rem;
+  font-weight: 700;
+  opacity: 0.72;
+  font-variant-numeric: tabular-nums;
+}
 
 .timer {
   font-size: 3.6rem;
@@ -451,6 +521,17 @@ p { margin: 0; }
 }
 .review-row.ok { border-color: #235c3d; background: #10241a; }
 .review-row.skip { border-color: var(--line); }
+
+/* Marks the card that was still on screen when the bell went. */
+.review-row .badge {
+  flex: none;
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 5px 7px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
 
 .review-word {
   flex: 1;

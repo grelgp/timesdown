@@ -20,6 +20,17 @@
   var TURN_CHOICES = [30, 45, 60, 90];
   var FLASH_MS = 250;
 
+  /* Every screen change locks the buttons for a moment.
+   *
+   * The buttons that matter sit in the same place from one screen to the next
+   * - "Got it" is where "Got it" was on the card before it, "Start the turn"
+   * is where "Confirm" was a heartbeat earlier - so a second tap that the
+   * thumb had already committed to lands on whatever replaced the thing it was
+   * aimed at. That is how a card nobody had seen got marked as guessed, and
+   * how the next team's turn started itself. A tap this soon after a repaint
+   * was meant for the screen that has just gone, so it is dropped. */
+  var TAP_LOCK_MS = 600;
+
   // ------------------------------------------------------------------ state
 
   var S = {
@@ -29,12 +40,14 @@
     openWord: null,    // id of the word chip currently expanded
     confirmStart: false,
     busy: false,
-    renderKey: null
+    renderKey: null,
+    lockUntil: 0       // taps before this are ignored, see TAP_LOCK_MS
   };
 
   var es = null;
   var pollHandle = null;
   var timerHandle = null;
+  var tickedAt = null;    // last second already ticked, so each one sounds once
   var flashHandle = null;
   var toastHandle = null;
   var audioCtx = null;
@@ -75,7 +88,14 @@
   }
 
   function loadGame(code) {
-    try { return JSON.parse(ls('td.game.' + code) || 'null'); } catch (e) { return null; }
+    var saved;
+    try { saved = JSON.parse(ls('td.game.' + code) || 'null'); } catch (e) { return null; }
+    if (!saved) return null;
+    // A game saved before turn lengths were split per round carried one number.
+    if (!Array.isArray(saved.roundSeconds)) {
+      saved.roundSeconds = ROUNDS.map(function () { return saved.turnSeconds || 30; });
+    }
+    return saved;
   }
 
   // ------------------------------------------------------------- small utils
@@ -101,32 +121,63 @@
     try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) { /* no-op */ }
   }
 
-  /** A short tone, so the speaker can put the phone down and still hear time run out. */
-  function beep(frequency, ms) {
+  function audio() {
     try {
       if (!audioCtx) {
         var Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return;
+        if (!Ctx) return null;
         audioCtx = new Ctx();
       }
       if (audioCtx.state === 'suspended') audioCtx.resume();
-      var now = audioCtx.currentTime;
-      var osc = audioCtx.createOscillator();
-      var gain = audioCtx.createGain();
+      return audioCtx;
+    } catch (e) { return null; }   // audio is a nicety, never a blocker
+  }
+
+  /** One decaying sine. Everything the game makes a noise with is built of these. */
+  function partial(frequency, ms, level, delay) {
+    try {
+      var ctx = audio();
+      if (!ctx) return;
+      var start = ctx.currentTime + (delay || 0);
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
       osc.type = 'sine';
       osc.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.3, now + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + ms / 1000);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(level, start + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + ms / 1000);
       osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + ms / 1000 + 0.03);
-    } catch (e) { /* audio is a nicety, never a blocker */ }
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + ms / 1000 + 0.03);
+    } catch (e) { /* no audio on this device */ }
+  }
+
+  /* A struck bell: a hum note an octave down, the prime, and the minor third
+   * above it that is what actually makes a bell sound like a bell. Long decay
+   * on purpose - the speaker is mid-mime with the phone somewhere else, and a
+   * short beep gets lost under a table shouting answers. */
+  function bell(delay) {
+    partial(392, 1900, 0.20, delay);
+    partial(784, 1700, 0.09, delay);
+    partial(932, 1200, 0.07, delay);
+    partial(1176, 900, 0.05, delay);
+    partial(1568, 700, 0.04, delay);
+  }
+
+  /** Two rising notes: the pile is empty, and that is good news. */
+  function chime() {
+    partial(784, 220, 0.26, 0);
+    partial(1175, 420, 0.24, 0.13);
+  }
+
+  /** One of the last few seconds ticking by. */
+  function tick() {
+    partial(1320, 70, 0.15, 0);
   }
 
   function unlockAudio() {
-    beep(1, 1); // creates + resumes the context inside a user gesture
+    partial(1, 1, 0.0002, 0); // creates + resumes the context inside a user gesture
   }
 
   function keepAwake(on) {
@@ -221,15 +272,29 @@
 
   // -------------------------------------------------------------- game model
 
+  /** Round lengths are set independently: mime needs longer than talking does. */
+  function roundSecondsOf(settings) {
+    if (settings && Array.isArray(settings.roundSeconds)) {
+      return ROUNDS.map(function (_, i) {
+        return settings.roundSeconds[i] || settings.turnSeconds || 30;
+      });
+    }
+    return ROUNDS.map(function () { return (settings && settings.turnSeconds) || 30; });
+  }
+
+  function turnLength(g) {
+    return g.roundSeconds[g.round] || 30;
+  }
+
   function newGame(deck, settings) {
     var cards = {};
     var ids = [];
     deck.forEach(function (card) { cards[card.id] = card.text; ids.push(card.id); });
     var names = settings.teamNames.slice(0, settings.teams);
     return {
-      v: 1,
+      v: 2,
       teamNames: names,
-      turnSeconds: settings.turnSeconds,
+      roundSeconds: roundSecondsOf(settings),
       scores: names.map(function () { return [0, 0, 0]; }),
       cards: cards,
       allIds: ids,
@@ -243,11 +308,16 @@
 
   function beginTurn() {
     var g = S.game;
+    var seconds = turnLength(g);
     g.turn = {
       order: [],
       results: {},
-      endsAt: Date.now() + g.turnSeconds * 1000,
+      seconds: seconds,
+      startedAt: Date.now(),
+      endsAt: Date.now() + seconds * 1000,
+      deckAtStart: g.deck.slice(),   // so a turn started by accident can be undone
       current: g.deck.length ? g.deck[0] : null,
+      expired: null,                 // the card on screen when the bell went
       reason: null
     };
     g.stage = 'play';
@@ -258,13 +328,47 @@
     render();
   }
 
+  /** Throw the turn away and hand the pile back exactly as it was. */
+  function abandonTurn(ask) {
+    var g = S.game;
+    if (!g || !g.turn || !g.turn.deckAtStart) return;
+    var left = g.stage === 'play' ? Math.max(0, g.turn.endsAt - Date.now()) : 0;
+    if (ask) {
+      // window.confirm freezes everything, this clock included, so take it down
+      // first and put the remaining time back if the answer is no.
+      stopTimer();
+      if (!window.confirm('Abandon ' + g.teamNames[g.team] + "'s turn? " +
+          'Nothing is scored and the pile goes back as it was.')) {
+        if (g.stage === 'play') {
+          g.turn.endsAt = Date.now() + left;
+          startTimer();
+        }
+        return;
+      }
+    }
+    stopTimer();
+    g.deck = g.turn.deckAtStart.slice();
+    g.turn = null;
+    g.stage = 'turn-intro';
+    saveGame();
+    render();
+  }
+
   function startTimer() {
     stopTimer();
+    tickedAt = null;
     timerHandle = setInterval(function () {
       var g = S.game;
       if (!g || g.stage !== 'play' || !g.turn) return stopTimer();
       var left = g.turn.endsAt - Date.now();
       paintTimer(left);
+      // The last few seconds tick audibly: in the mime round the speaker is
+      // acting, not looking at the phone.
+      var seconds = Math.ceil(Math.max(0, left) / 1000);
+      if (seconds >= 1 && seconds <= 5 && seconds !== tickedAt) {
+        tickedAt = seconds;
+        tick();
+      }
       if (left <= 0) endTurn('time');
     }, 100);
   }
@@ -276,7 +380,7 @@
 
   function paintTimer(msLeft) {
     var g = S.game;
-    var total = g.turnSeconds * 1000;
+    var total = ((g.turn && g.turn.seconds) || turnLength(g)) * 1000;
     var left = Math.max(0, msLeft);
     var seconds = Math.ceil(left / 1000);
     var text = document.getElementById('timerText');
@@ -332,16 +436,24 @@
     var g = S.game;
     if (!g || g.stage !== 'play') return;
     stopTimer();
+    /* The card on screen when the bell goes has very often just been guessed -
+       the table shouted it and the speaker was half a second short of the
+       button. Send it to the review list unticked, so the speaker can award it
+       if everyone agrees, instead of it silently going nowhere. */
+    if (reason === 'time' && g.turn.current) {
+      noteCard(g.turn.current, 'skip');
+      g.turn.expired = g.turn.current;
+    }
     g.turn.reason = reason;
     g.turn.current = null;
     g.stage = 'review';
     saveGame();
     if (reason === 'time') {
       buzz([140, 70, 140]);
-      beep(660, 200);
-      setTimeout(function () { beep(440, 320); }, 220);
+      bell(0);
+      bell(0.34);
     } else {
-      beep(880, 160);
+      chime();
     }
     render();
   }
@@ -349,6 +461,27 @@
   function turnScore() {
     var turn = S.game.turn;
     return turn.order.filter(function (id) { return turn.results[id] === 'ok'; }).length;
+  }
+
+  /**
+   * Pick a game back up off local storage. The clock kept running while the
+   * app was gone, so a turn is never resumed mid-card: it lands on the review
+   * screen, with whatever card was on screen listed unticked like any other
+   * card the bell caught.
+   */
+  function resumeGame(saved) {
+    S.game = saved;
+    S.view = 'game';
+    if (saved.stage === 'play' && saved.turn) {
+      if (saved.turn.current) {
+        noteCard(saved.turn.current, 'skip');
+        saved.turn.expired = saved.turn.current;
+      }
+      saved.turn.current = null;
+      saved.turn.reason = 'time';
+      saved.stage = 'review';
+      saveGame();
+    }
   }
 
   /** Apply the speaker's corrections, bank the score, hand over to the next team. */
@@ -435,6 +568,38 @@
     var el = document.getElementById(id);
     if (el) el.addEventListener(event, handler);
     return el;
+  }
+
+  // ---- stray taps ----------------------------------------------------------
+
+  function lockTaps() {
+    S.lockUntil = Date.now() + TAP_LOCK_MS;
+  }
+
+  /**
+   * Wrap a handler that moves the game on, so a tap aimed at the screen that
+   * has just been replaced does not act on the one that replaced it. See
+   * TAP_LOCK_MS.
+   */
+  function guard(handler) {
+    return function (event) {
+      if (Date.now() < S.lockUntil) return;
+      handler(event);
+    };
+  }
+
+  /** Show that a guarded button is not listening yet, and stop when it is. */
+  function coolDown(el) {
+    var left = S.lockUntil - Date.now();
+    if (!el || left <= 0) return el;
+    el.classList.add('cooling');
+    setTimeout(function () { el.classList.remove('cooling'); }, left);
+    return el;
+  }
+
+  /** on() + guard() + coolDown(), which is what every game button wants. */
+  function onGuarded(id, handler) {
+    return coolDown(on(id, 'click', guard(handler)));
   }
 
   // ---- home ----------------------------------------------------------------
@@ -526,7 +691,7 @@
   function lobbyKey() {
     var r = S.room;
     return ['lobby', r.phase, r.isOwner, S.openWord, S.confirmStart,
-      r.settings.teams, r.settings.turnSeconds].join('|');
+      r.settings.teams, roundSecondsOf(r.settings).join('-')].join('|');
   }
 
   function wordListHtml() {
@@ -590,9 +755,18 @@
       return '<input class="field" data-teamname="' + i + '" maxlength="24" value="' + esc(name) +
         '" aria-label="Name of team ' + (i + 1) + '" placeholder="Team ' + (i + 1) + '">';
     }).join('');
-    var turnButtons = TURN_CHOICES.map(function (secs) {
-      return '<button type="button" class="btn" data-turn="' + secs + '" aria-pressed="' +
-        (s.turnSeconds === secs) + '">' + secs + 's</button>';
+    // One row per round: miming a word takes a good deal longer than saying a
+    // sentence about it, so the three are set independently.
+    var seconds = roundSecondsOf(s);
+    var turnRows = ROUNDS.map(function (round, i) {
+      var buttons = TURN_CHOICES.map(function (secs) {
+        return '<button type="button" class="btn" data-round="' + i + '" data-turn="' + secs +
+          '" aria-pressed="' + (seconds[i] === secs) + '">' + secs + 's</button>';
+      }).join('');
+      return '<div class="seg-row">' +
+        '<span class="seg-label">' + esc(round.title) + '</span>' +
+        '<div class="seg">' + buttons + '</div>' +
+        '</div>';
     }).join('');
 
     return [
@@ -604,10 +778,20 @@
       '  <div class="stack-sm" id="teamNames">' + nameInputs + '</div>',
       '  <div class="stack-sm">',
       '    <h3>Turn length</h3>',
-      '    <div class="seg" id="turnSeg">' + turnButtons + '</div>',
+      '    <div class="stack-sm" id="turnSeg">' + turnRows + '</div>',
       '  </div>',
       '</div>'
     ].join('');
+  }
+
+  function startNote(r) {
+    return r.totalWords < 1
+      ? 'Add at least one card first.'
+      : 'Check the deck size with the table before you start.';
+  }
+
+  function deckSize(r) {
+    return r.totalWords + ' ' + (r.totalWords === 1 ? 'card' : 'cards');
   }
 
   function startBlockHtml() {
@@ -615,14 +799,12 @@
     if (!S.confirmStart) {
       return '<button class="btn btn-primary btn-lg btn-block" id="startBtn"' +
         (r.totalWords < 1 ? ' disabled' : '') + '>Start the game</button>' +
-        (r.totalWords < 1
-          ? '<p class="small muted center">Add at least one card first.</p>'
-          : '<p class="small muted center">Check the deck size with the table before you start.</p>');
+        '<p class="small muted center" id="startNote">' + startNote(r) + '</p>';
     }
     return [
       '<div class="panel stack">',
       '  <div class="center stack-sm">',
-      '    <h2>Start with ' + r.totalWords + ' ' + (r.totalWords === 1 ? 'card' : 'cards') + '?</h2>',
+      '    <h2>Start with <span id="startCount">' + deckSize(r) + '</span>?</h2>',
       '    <p class="small muted">This locks the deck for the game. Anyone still adding cards is',
       '       filling the deck for the <em>next</em> game.</p>',
       '  </div>',
@@ -764,14 +946,7 @@
     on('resumeBtn', 'click', function () {
       var saved = loadGame(S.room.code);
       if (saved) {
-        S.game = saved;
-        if (S.game.stage === 'play') {
-          // Time kept running while the app was gone; do not resume mid-turn.
-          S.game.stage = 'review';
-          S.game.turn.current = null;
-          S.game.turn.reason = 'time';
-        }
-        S.view = 'game';
+        resumeGame(saved);
         render();
       } else {
         api('/rooms/' + S.room.code + '/reset', auth({ mode: 'replay' })).then(function (data) {
@@ -794,7 +969,9 @@
       turnSeg.addEventListener('click', function (e) {
         var btn = e.target.closest('[data-turn]');
         if (!btn) return;
-        saveSettings({ turnSeconds: Number(btn.getAttribute('data-turn')) });
+        var next = roundSecondsOf(S.room.settings);
+        next[Number(btn.getAttribute('data-round'))] = Number(btn.getAttribute('data-turn'));
+        saveSettings({ roundSeconds: next });
       });
     }
 
@@ -820,17 +997,29 @@
     checkDraft();
   }
 
-  /** Update the numbers and the card list without rebuilding the screen. */
+  /**
+   * Update the numbers and the card list without rebuilding the screen - a
+   * card arriving from someone else's phone must not throw away what the
+   * person holding this one is halfway through typing. Everything downstream
+   * of the deck size has to be patched here too, or it goes stale: the deck
+   * size is not in lobbyKey(), so a new card never triggers a full render.
+   */
   function patchLobby() {
     var r = S.room;
     var mine = document.getElementById('cMine');
     var total = document.getElementById('cTotal');
     var devices = document.getElementById('cDevices');
     var list = document.getElementById('wordList');
+    var start = document.getElementById('startBtn');
+    var note = document.getElementById('startNote');
+    var count = document.getElementById('startCount');
     if (mine) mine.textContent = r.myWordCount;
     if (total) total.textContent = r.totalWords;
     if (devices) devices.textContent = r.deviceCount;
     if (list) list.innerHTML = wordListHtml();
+    if (start) start.disabled = r.totalWords < 1;
+    if (note) note.textContent = startNote(r);
+    if (count) count.textContent = deckSize(r);
     var dot = document.getElementById('liveDot');
     if (dot) dot.className = 'dot' + (es && es.readyState === 1 ? '' : ' off');
   }
@@ -854,6 +1043,8 @@
 
   function renderGame() {
     var g = S.game;
+    // Every game screen repaints under a thumb that may already be moving.
+    lockTaps();
     if (g.stage === 'play') return renderPlay();
     if (g.stage === 'review') return renderReview();
     if (g.stage === 'round-end') return renderRoundEnd();
@@ -868,31 +1059,40 @@
       '</div>';
   }
 
+  /* The handover screen. Its one button sits in the middle of the screen and
+     nowhere near the bottom, because the button the host tapped a moment ago -
+     "Confirm" on the review screen - is a full-width bar along the bottom
+     edge. Two things worth taking care over never share a target. */
   function renderTurnIntro() {
     var g = S.game;
     var round = ROUNDS[g.round];
+    var scored = g.scores.some(function (rows) {
+      return rows.some(function (n) { return n > 0; });
+    });
     setHtml('game|intro|' + g.round + '|' + g.team, [
       gameTopbar(true),
       '<div class="game">',
-      '  <div class="spacer"></div>',
       '  <div class="game-head stack-sm">',
       '    <span class="round-pill">' + esc(round.label) + ' &middot; ' + esc(round.title) + '</span>',
       '    <div class="team-name">' + esc(g.teamNames[g.team]) + "&#39;s turn</div>",
       '    <p class="small muted">' + esc(round.rule) + '</p>',
       '  </div>',
+      scored ? '<div class="panel">' + scoresTableHtml() + '</div>' : '',
       '  <div class="spacer"></div>',
-      '  <div class="panel center stack-sm">',
-      '    <p class="small muted">Pass the phone to the speaker.</p>',
-      '    <p>' + plural(g.deck.length, 'card', 'cards') + ' left in this round</p>',
+      '  <div class="orb-wrap">',
+      '    <button class="start-orb" id="startTurn">',
+      '      <span class="orb-go">Start</span>',
+      '      <span class="orb-secs">' + turnLength(g) + 's</span>',
+      '    </button>',
       '  </div>',
-      '  <button class="btn btn-primary btn-lg btn-block" id="startTurn">Start the ' +
-        g.turnSeconds + 's turn</button>',
+      '  <div class="spacer"></div>',
+      '  <p class="small muted center">Pass the phone to the speaker.<br>',
+      '     ' + plural(g.deck.length, 'card', 'cards') + ' left in this round</p>',
       '</div>'
     ].join(''));
 
-    on('startTurn', 'click', beginTurn);
+    onGuarded('startTurn', beginTurn);
     on('quitBtn', 'click', quitGame);
-    renderScoresInto();
   }
 
   function renderPlay() {
@@ -902,9 +1102,8 @@
     setHtml('game|play|' + g.turn.current, [
       '<div class="game">',
       '  <div class="game-head stack-sm">',
-      '    <span class="round-pill">' + esc(ROUNDS[g.round].title) + ' &middot; ' +
-           esc(g.teamNames[g.team]) + '</span>',
-      '    <div class="timer" id="timerText">' + g.turnSeconds + '</div>',
+      abandonBarHtml(esc(ROUNDS[g.round].title) + ' &middot; ' + esc(g.teamNames[g.team])),
+      '    <div class="timer" id="timerText">' + turnLength(g) + '</div>',
       '    <div class="timer-bar" id="timerBar"><span style="width:100%"></span></div>',
       '  </div>',
       '  <div class="card" id="card">',
@@ -923,10 +1122,35 @@
     ].join(''));
 
     wireHoldToReveal(document.getElementById('card'));
-    on('skipBtn', 'click', skipCard);
-    on('okBtn', 'click', validateCard);
+    onGuarded('skipBtn', skipCard);
+    onGuarded('okBtn', validateCard);
+    wireAbandon();
     paintTimer(g.turn.endsAt - Date.now());
     if (!timerHandle) startTimer();
+  }
+
+  /** The round pill, with the get-me-out-of-here cross beside it. */
+  function abandonBarHtml(pillHtml) {
+    var turn = S.game.turn;
+    return '<div class="head-row">' +
+      '<span aria-hidden="true"></span>' +
+      '<span class="round-pill">' + pillHtml + '</span>' +
+      // A game saved before this existed has no pile to hand back, so no cross.
+      (turn && turn.deckAtStart
+        ? '<button class="icon-btn" id="abandonBtn" aria-label="Abandon this turn">&#10005;</button>'
+        : '<span aria-hidden="true"></span>') +
+      '</div>';
+  }
+
+  function wireAbandon() {
+    onGuarded('abandonBtn', function () {
+      var g = S.game;
+      // A turn started by a stray tap is nought seconds old with nothing on it;
+      // anything else is real work and gets asked about first.
+      var untouched = g.stage === 'play' && !g.turn.order.length &&
+        Date.now() - g.turn.startedAt < 5000;
+      abandonTurn(!untouched);
+    });
   }
 
   /** Reveal while a finger is down, hide the moment it lifts. */
@@ -954,20 +1178,28 @@
       var kept = turn.results[id] === 'ok';
       return '<div class="review-row ' + (kept ? 'ok' : 'skip') + '" data-row="' + id + '">' +
         '<button class="review-word" data-reveal="' + id + '">' + esc(g.cards[id]) + '</button>' +
+        (id === turn.expired
+          ? '<span class="badge" title="On screen when the bell went">&#9203;</span>'
+          : '') +
         '<button class="toggle" data-toggle="' + id + '" aria-label="Toggle this card">' +
         (kept ? '&#10003;' : '&#8722;') + '</button>' +
         '</div>';
     }).join('');
 
     var heading = turn.reason === 'cleared' ? 'Pile cleared!' : "Time&#39;s up";
+    var help = 'Speaker: fix any bad calls. Hold a word to read it, tap the ' +
+      'button on the right to flip it.' +
+      (turn.expired
+        ? ' The card still on screen at the bell (&#9203;) is listed unticked - ' +
+          'tick it if the table had already said it.'
+        : '');
 
     setHtml('game|review|' + g.round + '|' + g.team, [
       '<div class="game">',
       '  <div class="game-head stack-sm">',
-      '    <span class="round-pill">' + esc(g.teamNames[g.team]) + '</span>',
+      abandonBarHtml(esc(g.teamNames[g.team])),
       '    <h2>' + heading + '</h2>',
-      '    <p class="small muted">Speaker: fix any bad calls. Hold a word to read it, ',
-      '       tap the button on the right to flip it.</p>',
+      '    <p class="small muted">' + help + '</p>',
       '  </div>',
       turn.order.length
         ? '<div class="review-list" id="reviewList">' + rows + '</div>'
@@ -1013,7 +1245,8 @@
       });
     }
 
-    on('confirmBtn', 'click', confirmReview);
+    onGuarded('confirmBtn', confirmReview);
+    wireAbandon();
   }
 
   function scoresTableHtml() {
@@ -1066,7 +1299,7 @@
       '</div>'
     ].join(''));
 
-    on('nextBtn', 'click', nextRound);
+    onGuarded('nextBtn', nextRound);
     on('quitBtn', 'click', quitGame);
   }
 
@@ -1090,13 +1323,13 @@
       '</div>'
     ].join(''));
 
-    on('replayBtn', 'click', function () {
+    onGuarded('replayBtn', function () {
       api('/rooms/' + S.room.code + '/reset', auth({ mode: 'replay' })).then(function (data) {
         startGameWith(data.deck, data.settings);
       }).catch(function (err) { toast(err.message, true); });
     });
-    on('keepBtn', 'click', function () { backToLobby('keep'); });
-    on('clearBtn', 'click', function () {
+    onGuarded('keepBtn', function () { backToLobby('keep'); });
+    onGuarded('clearBtn', function () {
       if (!window.confirm('Delete every card in this room? Players will have to add new ones.')) return;
       backToLobby('clear');
     });
@@ -1120,21 +1353,6 @@
     backToLobby('keep');
   }
 
-  function renderScoresInto() {
-    // Turn intro shows the running table underneath, if there is anything to show.
-    var g = S.game;
-    var any = g.scores.some(function (rows) {
-      return rows.some(function (n) { return n > 0; });
-    });
-    if (!any) return;
-    var host = document.querySelector('.game');
-    if (!host) return;
-    var box = document.createElement('div');
-    box.className = 'panel';
-    box.innerHTML = scoresTableHtml();
-    host.insertBefore(box, host.lastElementChild);
-  }
-
   // ------------------------------------------------------------------ bootup
 
   function boot() {
@@ -1149,16 +1367,7 @@
       if (sess.ownerToken && !state.isOwner) setSession({ code: sess.code, ownerToken: null });
       if (state.phase === 'playing' && state.isOwner) {
         var saved = loadGame(sess.code);
-        if (saved && saved.stage && saved.stage !== 'game-end') {
-          S.game = saved;
-          if (saved.stage === 'play' && saved.turn) {
-            // The clock kept ticking while we were away - land on the review screen.
-            saved.stage = 'review';
-            saved.turn.current = null;
-            saved.turn.reason = 'time';
-          }
-          S.view = 'game';
-        }
+        if (saved && saved.stage && saved.stage !== 'game-end') resumeGame(saved);
       }
       connect();
       render();

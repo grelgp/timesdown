@@ -33,8 +33,8 @@ Everyone must be on the same network. Set `PORT` to use a different port.
 3. **Everyone adds cards.** Your own cards are listed but masked; tap one to
    read it or remove it. You can see how many you added and how many are in the
    deck overall, but never anyone else's words.
-4. **The host picks the number of teams** (2-6, with editable names) and the
-   turn length.
+4. **The host picks the number of teams** (2-6, with editable names) and a turn
+   length for each of the three rounds separately.
 5. **The host confirms the deck size and starts.** From here only the host's
    phone matters - everyone else can pocket theirs, or stay and keep adding
    cards for the next game.
@@ -44,9 +44,14 @@ Everyone must be on the same network. Set `PORT` to use a different port.
    - **Got it** flashes the whole screen green for a quarter second, so the rest
      of the table can see the call was made.
    - **Skip** sends the card to the bottom of the pile.
+   - The last five seconds tick, and a bell ends the turn.
+   - The **cross in the corner** throws the turn away and hands the pile back
+     untouched, for when a turn got started by accident.
 7. **After each turn** every card that came up is listed for correction. Hold a
    word to read it, tap the button beside it to flip a bad call. Cards taken
-   back go straight into the pile; cards awarded late come out of it.
+   back go straight into the pile; cards awarded late come out of it. The card
+   still on screen when the bell went is listed too, unticked - the table had
+   usually said it a moment before the speaker could press the button.
 8. **A round ends when the pile is empty**, scores are banked, and the full deck
    comes back shuffled for the next round.
 9. **At the end**: final scores, then replay the same deck, start a new deck
@@ -74,9 +79,20 @@ never a refusal - "blue whale" is a perfectly good card. Same for duplicates
 from the same phone.
 
 **A turn timer was added.** The brief didn't mention one, but Time's Up doesn't
-work without it. It defaults to 30 seconds and the host can set 30/45/60/90.
-The end of a turn also beeps and vibrates, since the speaker may be miming with
-the phone face down.
+work without it. Each round has its own length, set separately, because they
+are not the same job: 30 seconds is plenty to talk with and nowhere near enough
+to act with. The defaults are 30/30/45, and the host can set any round to
+30/45/60/90. The last five seconds tick and a bell ends the turn, since the
+speaker may be miming with the phone face down.
+
+**A tap is ignored for the first moment after the screen changes.** The buttons
+worth taking care over sit in the same place from one screen to the next - "Got
+it" lands where "Got it" was on the card before, the start button was where
+"Confirm" had been - so a second tap the thumb had already committed to used to
+act on whatever replaced the thing it was aimed at. That is how cards nobody had
+seen came out of the pile marked as guessed, and how the next team's turn
+started itself. The handover screen's button also moved to the middle of the
+screen, so it shares no edge with the "Confirm" bar that precedes it.
 
 ## Deploying
 
@@ -109,7 +125,7 @@ server locally.
 | `server.js` | HTTP + JSON API + Server-Sent Events. In-memory rooms, no deps. |
 | `public/index.html` | App shell. |
 | `public/styles.css` | Everything visual. Mobile-first, dark, big thumb targets. |
-| `public/rules.js` | Pure deck/turn rules, shared by the browser and the tests. |
+| `public/rules.js` | Pure deck/turn rules, shared by the browser, the server and the tests. |
 | `public/app.js` | Lobby, game loop, rendering. |
 | `test/` | Node's built-in test runner. |
 | `Dockerfile` | Single-stage `node:20-alpine`, runs as `node` on port 3000. |
@@ -124,7 +140,8 @@ ends any game in progress.
 node --test test/
 ```
 
-Covers the deck arithmetic (skips, corrections in both directions, a whole round
-terminating with every card scored exactly once) and the API end to end,
-including that a device is never sent another device's words - over both the
-polling endpoint and the live stream.
+Covers the deck arithmetic (skips, corrections in both directions, the card
+caught by the bell, a whole round terminating with every card scored exactly
+once) and the API end to end, including per-round turn lengths and that a device
+is never sent another device's words - over both the polling endpoint and the
+live stream.

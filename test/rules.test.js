@@ -35,6 +35,20 @@ test('correction: a card wrongly skipped is removed and counted', () => {
   assert.equal(out.scored, 1);
 });
 
+test('the card caught by the bell can be awarded, or left where it is', () => {
+  // Time ran out with 'a' still on screen, so it is still on top of the pile
+  // and listed for review unticked.
+  const deck = ['a', 'b', 'c'];
+
+  const left = applyTurn(deck, ['a'], { a: 'skip' });
+  assert.deepEqual(left.deck, ['a', 'b', 'c'], 'stays put, and only once');
+  assert.equal(left.scored, 0);
+
+  const awarded = applyTurn(deck, ['a'], { a: 'ok' });
+  assert.deepEqual(awarded.deck, ['b', 'c'], 'the table agreed: it leaves the round');
+  assert.equal(awarded.scored, 1);
+});
+
 test('a card skipped then guessed in the same turn counts once', () => {
   // 'a' came round twice: skipped, then validated. Live play removed it.
   const deck = ['b'];
@@ -89,6 +103,14 @@ test('a round always terminates: every card ends up guessed', () => {
   }
 
   assert.equal(guessed, 40, 'every card scores exactly once across the round');
+});
+
+test('there is one default turn length per round, and mime gets the longest', () => {
+  const { DEFAULT_ROUND_SECONDS, ROUNDS } = Rules;
+  assert.equal(DEFAULT_ROUND_SECONDS.length, ROUNDS.length);
+  assert.ok(DEFAULT_ROUND_SECONDS.every((s) => s >= 15 && s <= 120));
+  const mime = DEFAULT_ROUND_SECONDS[ROUNDS.length - 1];
+  assert.ok(DEFAULT_ROUND_SECONDS.every((s) => s <= mime), 'acting takes longer than talking');
 });
 
 test('shuffle keeps every card exactly once', () => {
