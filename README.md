@@ -41,9 +41,11 @@ Everyone must be on the same network. Set `PORT` to use a different port.
 6. **Three rounds with the same deck**: describe it, then one word, then mime.
    The card is blank until the speaker holds a finger on it, so the phone can be
    set down mid-mime without giving anything away.
-   - **Got it** flashes the whole screen green for a quarter second, so the rest
-     of the table can see the call was made.
-   - **Skip** sends the card to the bottom of the pile.
+   - **Got it** flashes the whole screen green for a quarter second and plays a
+     short rising note, so the rest of the table can both see and hear that the
+     call was made.
+   - **Skip** sends the card to the bottom of the pile, with a low falling note
+     that cannot be mistaken for the got-it one.
    - The last five seconds tick, and a bell ends the turn.
    - The **cross in the corner** throws the turn away and hands the pile back
      untouched, for when a turn got started by accident.

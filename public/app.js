@@ -176,6 +176,25 @@
     partial(1320, 70, 0.15, 0);
   }
 
+  /* Two short notes rising a fifth: a card was got. Quieter and much shorter
+   * than the bell or the round-end chime, because this one fires every few
+   * seconds and has to sit under a table already talking. Its job is the same
+   * as the green flash - the rest of the table hears the call was made, so a
+   * card cannot be counted quietly. */
+  function ding() {
+    partial(1046, 60, 0.13, 0);
+    partial(1568, 110, 0.11, 0.05);
+  }
+
+  /* The same idea falling, an octave and a half down: a card was skipped.
+   * Low and dull on purpose - unmistakably not the got-it sound even from
+   * across the room, and never mistaken for the tick of the last five
+   * seconds, which is high and single. */
+  function thunk() {
+    partial(330, 80, 0.12, 0);
+    partial(247, 140, 0.10, 0.055);
+  }
+
   function unlockAudio() {
     partial(1, 1, 0.0002, 0); // creates + resumes the context inside a user gesture
   }
@@ -408,6 +427,7 @@
     noteCard(id, 'ok');
     g.deck.shift();
     flashGreen();
+    ding();
     buzz(35);
     nextCard();
   }
@@ -420,6 +440,7 @@
     g.deck.shift();
     g.deck.push(id);       // straight to the bottom of the pile
     flashSkip();
+    thunk();
     buzz(12);
     nextCard();
   }
