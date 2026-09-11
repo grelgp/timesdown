@@ -48,6 +48,13 @@ test('serves the app shell', async () => {
   assert.match(html, /Time&#39;s Down/);
 });
 
+test('healthz answers for the container healthcheck', async () => {
+  const { status, body } = await get('/healthz');
+  assert.equal(status, 200);
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.rooms, 'number');
+});
+
 test('rejects path traversal out of public/', async () => {
   const res = await fetch(BASE + '/..%2f..%2fserver.js');
   const text = await res.text();

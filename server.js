@@ -513,6 +513,11 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (req.method !== 'GET' && req.method !== 'HEAD') return fail(res, 405, 'Method not allowed');
+  // Polled by the container healthcheck. Answered from memory, so it proves
+  // the event loop is alive without touching public/.
+  if (url.pathname === '/healthz') {
+    return sendJson(res, 200, { ok: true, rooms: rooms.size, uptime: process.uptime() });
+  }
   serveStatic(req, res, url.pathname);
 });
 
